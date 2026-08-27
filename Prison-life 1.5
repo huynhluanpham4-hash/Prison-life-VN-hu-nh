@@ -1,0 +1,450 @@
+-- =========================================================
+--  Project: CSNT-VN (Prison Life Engine Refactoring)
+--  Status: Optimized & Modernized (2026 Edition)
+-- =========================================================
+
+local loadstring, game, Vector3, CFrame, Color3, Instance, task = loadstring, game, Vector3, CFrame, Color3, Instance, task
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+-- Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local StarterGui = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- System States
+local Enabled = false
+local Height = 0
+local LastHeight = 0
+local BaseY = 0
+
+-- ESP States & Garbage Collection
+local ESPEnabled = false
+local ESPConnections = {}
+local ActiveActiveTweens = {}
+
+-- 1. Khởi tạo Platform & Physics
+local Platform = Instance.new("Part")
+Platform.Name = "SanBayPhapSuChuanPhanDuong"
+Platform.Size = Vector3.new(12, 1, 12)
+Platform.Transparency = 1
+Platform.Material = Enum.Material.SmoothPlastic
+Platform.Anchored = true
+Platform.CanCollide = false
+Platform.Parent = workspace
+
+-- Dùng Attachment + LinearVelocity thay cho BodyVelocity đã deprecated
+local Attachment = Instance.new("Attachment")
+local UnderVelocity = Instance.new("LinearVelocity")
+UnderVelocity.MaxForce = 0
+UnderVelocity.VectorVelocity = Vector3.zero
+UnderVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+UnderVelocity.Attachment0 = Attachment
+
+-- Custom UI Setup
+local Window = Rayfield:CreateWindow({
+    Name = "CSNT-VN | Prison Life Engine",
+    LoadingTitle = "Auto Player Scan Engine v2.0",
+    LoadingSubtitle = "Đã tối ưu hóa hiệu năng & bộ nhớ",
+    ConfigurationSaving = { Enabled = false }
+})
+
+-- Bảng màu chuẩn phe
+local TeamColors = {
+    Guards = Color3.fromRGB(0, 120, 255),
+    Inmates = Color3.fromRGB(245, 150, 20),
+    Criminals = Color3.fromRGB(255, 0, 50),
+    Neutral = Color3.fromRGB(200, 200, 200)
+}
+
+local function GetPlayerTeamColor(p)
+    if not p then return TeamColors.Neutral end
+    if p.Team then
+        local name = p.Team.Name
+        if TeamColors[name] then return TeamColors[name] end
+    end
+    if p:FindFirstChild("TeamColor") then
+        local teamName = p.TeamColor.Name
+        if teamName == "Bright blue" then return TeamColors.Guards end
+        if teamName == "Bright orange" then return TeamColors.Inmates end
+        if teamName == "Bright red" then return TeamColors.Criminals end
+    end
+    return TeamColors.Neutral
+end
+
+-- Hàm Lướt Anti-Ban / Tween mượt
+local function AntiBanTween(targetCFrame)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if ActiveActiveTweens[hrp] then
+        ActiveActiveTweens[hrp]:Cancel()
+    end
+
+    local tweenInfo = TweenInfo.new(0.12, Enum.EasingStyle.Linear)
+    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
+    ActiveActiveTweens[hrp] = tween
+    
+    tween:Play()
+    tween.Completed:Wait()
+    ActiveActiveTweens[hrp] = nil
+end
+
+-- ================= TAB 1: MAIN =================
+local TabMain = Window:CreateTab("Main")
+
+TabMain:CreateButton({
+    Name = "Bật Chế Độ Cánh Bay",
+    Callback = function()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            BaseY = hrp.Position.Y - 3.5
+            Enabled = true
+            LastHeight = Height
+            if Height >= 0 then 
+                Platform.CanCollide = true 
+            end
+            Rayfield:Notify({Title = "Thông báo", Content = "Đã Bật Chế Độ Bay/Núp Map!", Duration = 2})
+        end
+    end
+})
+
+TabMain:CreateButton({
+    Name = "Tắt Chế Độ Cánh Bay",
+    Callback = function()
+        Enabled = false
+        Platform.CanCollide = false
+        Platform.Position = Vector3.new(0, -1000, 0)
+        UnderVelocity.MaxForce = 0
+        UnderVelocity.Parent = nil
+        Attachment.Parent = nil
+        Rayfield:Notify({Title = "Thông báo", Content = "Đã Tắt Chế Độ!", Duration = 2})
+    end
+})
+
+TabMain:CreateSlider({
+    Name = "Độ Cao Lอย/Núp (-50 đến 50)",
+    Range = {-50, 50},
+    Increment = 1,
+    CurrentValue = 0,
+    Callback = function(Value)
+        Height = Value
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        
+        if hrp and Enabled then
+            if LastHeight >= 0 and Value < 0 then
+                Platform.CanCollide = false
+                Attachment.Parent = hrp
+                UnderVelocity.Parent = hrp
+                
+                hrp.CFrame = CFrame.new(hrp.Position.X, BaseY + Value + 3.5, hrp.Position.Z)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, -500, 0)
+                task.wait(0.03)
+                UnderVelocity.MaxForce = 999999
+            elseif LastHeight < 0 and Value >= 0 then
+                UnderVelocity.MaxForce = 0
+                UnderVelocity.Parent = nil
+                Attachment.Parent = nil
+                
+                hrp.CFrame = CFrame.new(hrp.Position.X, BaseY + Value + 3.5, hrp.Position.Z)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 500, 0)
+                task.wait(0.03)
+                Platform.CanCollide = true
+            end
+        end
+        LastHeight = Value
+    end
+})
+
+-- ================= TAB 2: TELEPORT =================
+local TabTP = Window:CreateTab("TP")
+
+local SelectedPlayer = ""
+
+local function GetPlayerNames()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            table.insert(list, p.Name)
+        end
+    end
+    return list
+end
+
+local PlayerDropdown = TabTP:CreateDropdown({
+    Name = "Chọn Người Chơi Target",
+    Options = GetPlayerNames(),
+    CurrentOption = {""},
+    MultipleOptions = false,
+    Callback = function(Options)
+        SelectedPlayer = Options[1] or ""
+    end,
+})
+
+local function RefreshDropdown()
+    PlayerDropdown:Refresh(GetPlayerNames(), {""})
+end
+
+Players.PlayerAdded:Connect(RefreshDropdown)
+Players.PlayerRemoving:Connect(RefreshDropdown)
+
+TabTP:CreateButton({
+    Name = "Dịch Chuyển Đến Mục Tiêu",
+    Callback = function()
+        if SelectedPlayer == "" then return end
+        
+        local target = Players:FindFirstChild(SelectedPlayer)
+        if target and target.Character then
+            local targetHRP = target.Character:FindFirstChild("HumanoidRootPart")
+            local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            
+            if myHRP and targetHRP then
+                if Enabled and Height < 0 then
+                    local targetPos = CFrame.new(targetHRP.Position.X, BaseY + Height + 3.5, targetHRP.Position.Z)
+                    AntiBanTween(targetPos)
+                else
+                    local targetPos = targetHRP.CFrame * CFrame.new(0, 0, 2.5)
+                    AntiBanTween(targetPos)
+                end
+            end
+        end
+    end
+})
+
+-- ================= TAB 3: ESP WALLHACK =================
+local TabESP = Window:CreateTab("ESP")
+
+local function RemovePlayerESP(p)
+    if ESPConnections[p] then
+        for _, conn in ipairs(ESPConnections[p].Conns or {}) do
+            if conn then conn:Disconnect() end
+        end
+        if ESPConnections[p].Tag and ESPConnections[p].Tag.Parent then
+            ESPConnections[p].Tag:Destroy()
+        end
+        ESPConnections[p] = nil
+    end
+end
+
+local function CreatePlayerESP(p)
+    if p == LocalPlayer then return end
+    RemovePlayerESP(p) -- Clean up previous instances
+
+    ESPConnections[p] = { Conns = {}, Tag = nil }
+
+    local function CoreApply(character)
+        local head = character:WaitForChild("Head", 5)
+        if not head then return end
+
+        local oldTag = head:FindFirstChild("PrisonESP_Tag")
+        if oldTag then oldTag:Destroy() end
+
+        local bGui = Instance.new("BillboardGui")
+        bGui.Name = "PrisonESP_Tag"
+        bGui.AlwaysOnTop = true
+        bGui.Size = UDim2.new(0, 200, 0, 20)
+        bGui.ExtentsOffset = Vector3.new(0, 1.8, 0)
+        bGui.Adornee = head
+        bGui.Parent = head
+        
+        ESPConnections[p].Tag = bGui
+
+        local container = Instance.new("Frame")
+        container.Size = UDim2.new(1, 0, 1, 0)
+        container.BackgroundTransparency = 1
+        container.Parent = bGui
+
+        local layout = Instance.new("UIListLayout")
+        layout.FillDirection = Enum.FillDirection.Horizontal
+        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        layout.VerticalAlignment = Enum.VerticalAlignment.Center
+        layout.Padding = UDim.new(0, 5)
+        layout.Parent = container
+
+        local dot = Instance.new("Frame")
+        dot.Size = UDim2.new(0, 7, 0, 7)
+        dot.BackgroundColor3 = GetPlayerTeamColor(p)
+        dot.BorderSizePixel = 0
+        dot.Rotation = 45
+        dot.Parent = container
+
+        local label = Instance.new("TextLabel")
+        label.AutomaticSize = Enum.AutomaticSize.X
+        label.Size = UDim2.new(0, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = GetPlayerTeamColor(p)
+        label.TextStrokeTransparency = 0.2
+        label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = 13
+        label.Parent = container
+
+        local renderConn = RunService.Heartbeat:Connect(function()
+            if not ESPEnabled or not p.Parent or not character.Parent or not head.Parent then
+                RemovePlayerESP(p)
+                return
+            end
+
+            local color = GetPlayerTeamColor(p)
+            dot.BackgroundColor3 = color
+            label.TextColor3 = color
+
+            local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local targetHRP = character:FindFirstChild("HumanoidRootPart")
+            
+            if myHRP and targetHRP then
+                local dist = math.floor((myHRP.Position - targetHRP.Position).Magnitude)
+                label.Text = string.format("%s [@%s] [%dm]", p.DisplayName, p.Name, dist)
+            else
+                label.Text = string.format("%s [@%s]", p.DisplayName, p.Name)
+            end
+        end)
+
+        table.insert(ESPConnections[p].Conns, renderConn)
+    end
+
+    if p.Character then task.spawn(CoreApply, p.Character) end
+    
+    local charAddedConn = p.CharacterAdded:Connect(function(char)
+        task.spawn(CoreApply, char)
+    end)
+    
+    table.insert(ESPConnections[p].Conns, charAddedConn)
+end
+
+local function ClearAllESP()
+    for p, _ in pairs(ESPConnections) do
+        RemovePlayerESP(p)
+    end
+    ESPConnections = {}
+end
+
+TabESP:CreateToggle({
+    Name = "Kích Hoạt Định Vị 3 Phe (ESP Wallhack)",
+    CurrentValue = false,
+    Callback = function(Value)
+        ESPEnabled = Value
+        if ESPEnabled then
+            for _, p in ipairs(Players:GetPlayers()) do
+                CreatePlayerESP(p)
+            end
+        else
+            ClearAllESP()
+        end
+    end
+})
+
+Players.PlayerAdded:Connect(function(newPlayer)
+    if ESPEnabled then CreatePlayerESP(newPlayer) end
+end)
+
+Players.PlayerRemoving:Connect(function(leavingPlayer)
+    RemovePlayerESP(leavingPlayer)
+end)
+
+-- ================= TAB 4: CHIẾN THUẬT =================
+local TabTactics = Window:CreateTab("Chiến Thuật")
+
+local LOCATIONS = {
+    ROOF = CFrame.new(811.25, 118.99, 2369.02),
+    GUN_SHELF_1 = CFrame.new(817.74, 100.70, 2229.16),
+    GUN_SHELF_2 = CFrame.new(813.85, 100.94, 2229.19)
+}
+
+local LastPos = nil
+
+TabTactics:CreateButton({
+    Name = "Lên Nóc Nhà Tù (Toggle Lên/Về)",
+    Callback = function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            if LastPos then
+                AntiBanTween(LastPos)
+                LastPos = nil
+            else
+                LastPos = hrp.CFrame
+                AntiBanTween(LOCATIONS.ROOF)
+            end
+        end
+    end
+})
+
+TabTactics:CreateButton({
+    Name = "Đột Kích Kệ Súng 1 (Lấy Súng Rồng)",
+    Callback = function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local current = hrp.CFrame
+            AntiBanTween(LOCATIONS.GUN_SHELF_1)
+            task.wait(0.35)
+            AntiBanTween(current)
+        end
+    end
+})
+
+TabTactics:CreateButton({
+    Name = "Đột Kích Kệ Súng 2",
+    Callback = function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local current = hrp.CFrame
+            AntiBanTween(LOCATIONS.GUN_SHELF_2)
+            task.wait(0.35)
+            AntiBanTween(current)
+        end
+    end
+})
+
+TabTactics:CreateButton({
+    Name = "In Tọa Độ Hiện Tại Rõ Ràng",
+    Callback = function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local pos = hrp.Position
+            local cframeStr = string.format("CFrame.new(%.2f, %.2f, %.2f)", pos.X, pos.Y, pos.Z)
+            
+            Rayfield:Notify({
+                Title = "Tọa độ Pháp Sư",
+                Content = cframeStr,
+                Duration = 4,
+            })
+            
+            pcall(function()
+                StarterGui:SetCore("ChatMakeSystemMessage", {
+                    Text = "[CSNT-VN LOG]: " .. cframeStr,
+                    Color = Color3.fromRGB(255, 255, 0),
+                    Font = Enum.Font.SourceSansBold,
+                    TextSize = 15
+                })
+            end)
+        end
+    end
+})
+
+-- Loop quản lý Platform & UnderVelocity
+RunService.Heartbeat:Connect(function()
+    if not Enabled then return end
+
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if Height >= 0 then
+        Platform.CanCollide = true
+        Platform.Position = Vector3.new(hrp.Position.X, BaseY + Height, hrp.Position.Z)
+    else
+        Platform.CanCollide = false
+        Platform.Position = Vector3.new(0, -1000, 0)
+        local targetY = BaseY + Height + 3.5
+        if math.abs(hrp.Position.Y - targetY) > 1 then
+            hrp.CFrame = CFrame.new(hrp.Position.X, targetY, hrp.Position.Z)
+        end
+    end
+end)
+
