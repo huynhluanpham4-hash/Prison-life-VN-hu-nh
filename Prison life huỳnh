@@ -1,0 +1,556 @@
+-- =========================================================
+--  Project: CSNT-VN Engine & Player Utility (Fixed Execute 2026)
+--  Status: Fully Working - 100% Full Code
+-- =========================================================
+
+local loadstring, game, Vector3, CFrame, Color3, Instance, task = loadstring, game, Vector3, CFrame, Color3, Instance, task
+
+-- 1. RAYFIELD & SERVICES
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local StarterGui = game:GetService("StarterGui")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- 2. GLOBAL SYSTEM STATES & VARIABLES
+local Enabled = false
+local Height, LastHeight, BaseY = 0, 0, 0
+
+local ESPEnabled = false
+local ESPConnections = {}
+local ActiveTweens = {}
+
+local WalkSpeedEnabled, JumpPowerEnabled, InfiniteJumpEnabled = false, false, false
+local CustomWalkSpeed, CustomJumpPower = 16, 50
+
+local Flying = false
+local FlyMode = "Superman"
+local PoseState = 1
+local FlySpeed = 100
+local Connection = nil
+local BodyVelocity, BodyGyro
+local AnimTrackSuperman, AnimTrackStand
+local AnimID_Superman = "rbxassetid://507765644"
+local AnimID_Stand    = "rbxassetid://507777826"
+
+local AntiLagEnabled = false
+local KeepPlayerSkins = true
+local OriginalMaterials = {}
+local OriginalLightingProps = {}
+local TextureMapConnection = nil
+
+local FlyHUD = nil
+local BtnFlyToggle, BtnModeToggle, BtnPoseToggle
+local SelectedPlayer = ""
+
+-- 3. PLATFORM & PHYSICS SETUP (Núp Map)
+local Platform = Instance.new("Part")
+Platform.Name = "SanBayPhapSuChuanPhanDuong"
+Platform.Size = Vector3.new(12, 1, 12)
+Platform.Transparency = 1
+Platform.Material = Enum.Material.SmoothPlastic
+Platform.Anchored = true
+Platform.CanCollide = false
+Platform.Parent = workspace
+
+local Attachment = Instance.new("Attachment")
+local UnderVelocity = Instance.new("LinearVelocity")
+UnderVelocity.MaxForce = 0
+UnderVelocity.VectorVelocity = Vector3.zero
+UnderVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+UnderVelocity.Attachment0 = Attachment
+
+-- 4. HELPER FUNCTIONS
+local TeamColors = {
+    Guards = Color3.fromRGB(0, 120, 255),
+    Inmates = Color3.fromRGB(245, 150, 20),
+    Criminals = Color3.fromRGB(255, 0, 50),
+    Neutral = Color3.fromRGB(200, 200, 200)
+}
+
+local function GetPlayerTeamColor(p)
+    if not p then return TeamColors.Neutral end
+    if p.Team and TeamColors[p.Team.Name] then return TeamColors[p.Team.Name] end
+    if p:FindFirstChild("TeamColor") then
+        local tName = p.TeamColor.Name
+        if tName == "Bright blue" then return TeamColors.Guards end
+        if tName == "Bright orange" then return TeamColors.Inmates end
+        if tName == "Bright red" then return TeamColors.Criminals end
+    end
+    return TeamColors.Neutral
+end
+
+local function AntiBanTween(targetCFrame)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    if ActiveTweens[hrp] then ActiveTweens[hrp]:Cancel() end
+    local tween = TweenService:Create(hrp, TweenInfo.new(0.12, Enum.EasingStyle.Linear), {CFrame = targetCFrame})
+    ActiveTweens[hrp] = tween
+    tween:Play()
+    tween.Completed:Wait()
+    ActiveTweens[hrp] = nil
+end
+
+local function UpdateCharacterStats()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+
+    hum.WalkSpeed = WalkSpeedEnabled and CustomWalkSpeed or 16
+    hum.UseJumpPower = false
+    hum.JumpHeight = JumpPowerEnabled and CustomJumpPower or 7.2
+end
+
+-- 5. ANTI-LAG LOGIC
+local function IsPlayerCharacter(object)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character and object:IsDescendantOf(p.Character) then return true end
+    end
+    return false
+end
+
+local function OptimizeObject(v)
+    if not AntiLagEnabled or (KeepPlayerSkins and IsPlayerCharacter(v)) then return end
+
+    if v:IsA("BasePart") and not v:IsA("MeshPart") then
+        if not OriginalMaterials[v] then OriginalMaterials[v] = { Material = v.Material, MaterialVariant = v.MaterialVariant } end
+        v.Material = Enum.Material.SmoothPlastic
+    elseif v:IsA("MeshPart") then
+        if not OriginalMaterials[v] then OriginalMaterials[v] = { Material = v.Material, TextureID = v.TextureID } end
+        v.Material = Enum.Material.SmoothPlastic
+        v.TextureID = ""
+    elseif v:IsA("Decal") or v:IsA("Texture") then
+        if not OriginalMaterials[v] then OriginalMaterials[v] = { Transparency = v.Transparency } end
+        v.Transparency = 1
+    end
+end
+
+local function EnableAntiLag()
+    AntiLagEnabled = true
+    OriginalLightingProps.GlobalShadows = Lighting.GlobalShadows
+    Lighting.GlobalShadows = false
+
+    for _, v in ipairs(workspace:GetDescendants()) do OptimizeObject(v) end
+    if not TextureMapConnection then
+        TextureMapConnection = workspace.DescendantAdded:Connect(function(v)
+            if AntiLagEnabled then task.wait(); OptimizeObject(v) end
+        end)
+    end
+end
+
+local function DisableAntiLag()
+    AntiLagEnabled = false
+    if TextureMapConnection then TextureMapConnection:Disconnect(); TextureMapConnection = nil end
+    if OriginalLightingProps.GlobalShadows ~= nil then Lighting.GlobalShadows = OriginalLightingProps.GlobalShadows end
+
+    for part, data in pairs(OriginalMaterials) do
+        if part and part.Parent then
+            if part:IsA("BasePart") and not part:IsA("MeshPart") then
+                part.Material = data.Material
+                if data.MaterialVariant then part.MaterialVariant = data.MaterialVariant end
+            elseif part:IsA("MeshPart") then
+                part.Material = data.Material
+                part.TextureID = data.TextureID
+            elseif part:IsA("Decal") or part:IsA("Texture") then
+                part.Transparency = data.Transparency
+            end
+        end
+    end
+    table.clear(OriginalMaterials)
+end
+
+-- 6. ADVANCED FLY SYSTEM
+local function LoadAnimations()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    
+    local animator = hum:FindFirstChildOfClass("Animator") or Instance.new("Animator", hum)
+    
+    local a1 = Instance.new("Animation")
+    a1.AnimationId = AnimID_Superman
+    pcall(function()
+        AnimTrackSuperman = animator:LoadAnimation(a1)
+        AnimTrackSuperman.Priority = Enum.AnimationPriority.Action4
+        AnimTrackSuperman.Looped = true
+    end)
+
+    local a2 = Instance.new("Animation")
+    a2.AnimationId = AnimID_Stand
+    pcall(function()
+        AnimTrackStand = animator:LoadAnimation(a2)
+        AnimTrackStand.Priority = Enum.AnimationPriority.Action4
+        AnimTrackStand.Looped = true
+    end)
+end
+
+local function StopFlying()
+    if not Flying then return end
+    Flying = false
+    
+    if BtnFlyToggle then
+        BtnFlyToggle.Text = "FLY\nTẮT"
+        BtnFlyToggle.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    end
+
+    if AnimTrackSuperman then AnimTrackSuperman:Stop(0.2) end
+    if AnimTrackStand then AnimTrackStand:Stop(0.2) end
+    
+    if Connection then Connection:Disconnect(); Connection = nil end
+    if BodyVelocity then BodyVelocity:Destroy() end
+    if BodyGyro then BodyGyro:Destroy() end
+
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then
+        hum.PlatformStand = false
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end
+end
+
+local function StartFlying()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if Flying or not hrp or not hum then return end
+    Flying = true
+
+    if BtnFlyToggle then
+        BtnFlyToggle.Text = "FLY\nBẬT"
+        BtnFlyToggle.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+    end
+
+    hum.PlatformStand = true
+
+    BodyVelocity = Instance.new("BodyVelocity")
+    BodyVelocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    BodyVelocity.Velocity = Vector3.zero
+    BodyVelocity.Parent = hrp
+
+    BodyGyro = Instance.new("BodyGyro")
+    BodyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    BodyGyro.P = 10000
+    BodyGyro.D = 500
+    BodyGyro.Parent = hrp
+
+    if FlyMode == "Superman" and AnimTrackSuperman then AnimTrackSuperman:Play(0.2)
+    elseif FlyMode == "Stand" and AnimTrackStand then AnimTrackStand:Play(0.2) end
+
+    Connection = RunService.RenderStepped:Connect(function()
+        if not Flying or not char.Parent or not hrp.Parent or not hum.Parent then return end
+        
+        local camCF = Camera.CFrame
+        local moveDir = hum.MoveDirection
+        local baseCF = CFrame.lookAt(hrp.Position, hrp.Position + camCF.LookVector)
+
+        if FlyMode == "Superman" then
+            if PoseState == 1 then BodyGyro.CFrame = baseCF * CFrame.Angles(math.rad(-90), 0, 0)
+            elseif PoseState == 2 then BodyGyro.CFrame = baseCF * CFrame.Angles(math.rad(-90), math.rad(180), 0)
+            elseif PoseState == 3 then BodyGyro.CFrame = baseCF * CFrame.Angles(0, math.rad(90), math.rad(-90))
+            elseif PoseState == 4 then BodyGyro.CFrame = baseCF * CFrame.Angles(math.rad(90), 0, 0) end
+        else
+            BodyGyro.CFrame = CFrame.new(hrp.Position, hrp.Position + camCF.LookVector)
+        end
+
+        if moveDir.Magnitude > 0 then
+            local moveVector = (camCF.RightVector * moveDir.X) + (camCF.LookVector * -moveDir.Z)
+            BodyVelocity.Velocity = moveVector * FlySpeed
+        else
+            BodyVelocity.Velocity = Vector3.zero
+        end
+    end)
+end
+
+-- FLY HUD OVERLAY
+local function CreateFlyHUD()
+    if FlyHUD then return end
+    FlyHUD = Instance.new("ScreenGui")
+    FlyHUD.Name = "FlyHUD"
+    FlyHUD.ResetOnSpawn = false
+    FlyHUD.Parent = CoreGui
+
+    local Container = Instance.new("Frame")
+    Container.Size = UDim2.new(0, 50, 0, 160)
+    Container.Position = UDim2.new(0, 15, 0.4, -80)
+    Container.BackgroundTransparency = 1
+    Container.Parent = FlyHUD
+
+    local UIList = Instance.new("UIListLayout")
+    UIList.SortOrder = Enum.SortOrder.LayoutOrder
+    UIList.Padding = UDim.new(0, 8)
+    UIList.Parent = Container
+
+    local function CreateHUDButton(name, text, defaultColor)
+        local btn = Instance.new("TextButton")
+        btn.Name = name
+        btn.Size = UDim2.new(0, 50, 0, 44)
+        btn.BackgroundColor3 = defaultColor
+        btn.Text = text
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.TextSize = 11
+        btn.Font = Enum.Font.GothamBold
+        btn.Parent = Container
+
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 10)
+        corner.Parent = btn
+        return btn
+    end
+
+    BtnFlyToggle  = CreateHUDButton("BtnFlyToggle", Flying and "FLY\nBẬT" or "FLY\nTẮT", Flying and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(200, 50, 50))
+    BtnModeToggle = CreateHUDButton("BtnModeToggle", (FlyMode == "Superman") and "MODE\nSuper" or "MODE\nStand", (FlyMode == "Superman") and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(150, 50, 200))
+    BtnPoseToggle = CreateHUDButton("BtnPoseToggle", "POSE\n" .. PoseState, Color3.fromRGB(255, 140, 0))
+
+    BtnFlyToggle.MouseButton1Click:Connect(function()
+        if Flying then StopFlying() else StartFlying() end
+    end)
+
+    BtnModeToggle.MouseButton1Click:Connect(function()
+        FlyMode = (FlyMode == "Superman") and "Stand" or "Superman"
+        BtnModeToggle.Text = (FlyMode == "Superman") and "MODE\nSuper" or "MODE\nStand"
+        BtnModeToggle.BackgroundColor3 = (FlyMode == "Superman") and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(150, 50, 200)
+        if Flying then StopFlying(); StartFlying() end
+    end)
+
+    BtnPoseToggle.MouseButton1Click:Connect(function()
+        PoseState = (PoseState % 4) + 1
+        local poseNames = {"Úp Bụng", "Lật Ngửa", "Xoay Ngang", "Ngửa Bụng"}
+        BtnPoseToggle.Text = "POSE\n" .. PoseState
+        Rayfield:Notify({Title = "Đổi Tư Thế Bay", Content = "Tư thế: " .. poseNames[PoseState], Duration = 1.2})
+    end)
+end
+
+local function RemoveFlyHUD()
+    if FlyHUD then FlyHUD:Destroy(); FlyHUD = nil end
+end
+
+-- 7. ESP SYSTEM
+local function RemovePlayerESP(p)
+    if ESPConnections[p] then
+        for _, conn in ipairs(ESPConnections[p].Conns or {}) do
+            if conn then conn:Disconnect() end
+        end
+        if ESPConnections[p].Tag and ESPConnections[p].Tag.Parent then
+            ESPConnections[p].Tag:Destroy()
+        end
+        ESPConnections[p] = nil
+    end
+end
+
+local function CreatePlayerESP(p)
+    if p == LocalPlayer then return end
+    RemovePlayerESP(p)
+
+    ESPConnections[p] = { Conns = {}, Tag = nil }
+
+    local function CoreApply(character)
+        local head = character:WaitForChild("Head", 5)
+        if not head then return end
+
+        local oldTag = head:FindFirstChild("PrisonESP_Tag")
+        if oldTag then oldTag:Destroy() end
+
+        local bGui = Instance.new("BillboardGui")
+        bGui.Name = "PrisonESP_Tag"
+        bGui.AlwaysOnTop = true
+        bGui.Size = UDim2.new(0, 200, 0, 20)
+        bGui.ExtentsOffset = Vector3.new(0, 1.8, 0)
+        bGui.Adornee = head
+        bGui.Parent = head
+        
+        ESPConnections[p].Tag = bGui
+
+        local container = Instance.new("Frame")
+        container.Size = UDim2.new(1, 0, 1, 0)
+        container.BackgroundTransparency = 1
+        container.Parent = bGui
+
+        local layout = Instance.new("UIListLayout")
+        layout.FillDirection = Enum.FillDirection.Horizontal
+        layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        layout.VerticalAlignment = Enum.VerticalAlignment.Center
+        layout.Padding = UDim.new(0, 5)
+        layout.Parent = container
+
+        local dot = Instance.new("Frame")
+        dot.Size = UDim2.new(0, 7, 0, 7)
+        dot.BackgroundColor3 = GetPlayerTeamColor(p)
+        dot.BorderSizePixel = 0
+        dot.Rotation = 45
+        dot.Parent = container
+
+        local label = Instance.new("TextLabel")
+        label.AutomaticSize = Enum.AutomaticSize.X
+        label.Size = UDim2.new(0, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = GetPlayerTeamColor(p)
+        label.TextStrokeTransparency = 0.2
+        label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+        label.Font = Enum.Font.SourceSansBold
+        label.TextSize = 13
+        label.Parent = container
+
+        local renderConn = RunService.Heartbeat:Connect(function()
+            if not ESPEnabled or not p.Parent or not character.Parent or not head.Parent then
+                RemovePlayerESP(p)
+                return
+            end
+
+            local color = GetPlayerTeamColor(p)
+            dot.BackgroundColor3 = color
+            label.TextColor3 = color
+
+            local myHRP = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local targetHRP = character:FindFirstChild("HumanoidRootPart")
+            
+            if myHRP and targetHRP then
+                local dist = math.floor((myHRP.Position - targetHRP.Position).Magnitude)
+                label.Text = string.format("%s [@%s] [%dm]", p.DisplayName, p.Name, dist)
+            else
+                label.Text = string.format("%s [@%s]", p.DisplayName, p.Name)
+            end
+        end)
+
+        table.insert(ESPConnections[p].Conns, renderConn)
+    end
+
+    if p.Character then task.spawn(CoreApply, p.Character) end
+    table.insert(ESPConnections[p].Conns, p.CharacterAdded:Connect(function(char) task.spawn(CoreApply, char) end))
+end
+
+local function ClearAllESP()
+    for p, _ in pairs(ESPConnections) do RemovePlayerESP(p) end
+    ESPConnections = {}
+end
+
+-- =========================================================
+-- 8. UI BUILDER (RAYFIELD WINDOW & TABS)
+-- =========================================================
+local Window = Rayfield:CreateWindow({
+    Name = "CSNT-VN | All-In-One Ultimate Engine",
+    LoadingTitle = "Khởi tạo hệ thống...",
+    LoadingSubtitle = "Prison Life Engine + Custom Utilities",
+    ConfigurationSaving = { Enabled = false },
+    KeySystem = false
+})
+
+-- TAB 1: MAIN (Cánh bay / Núp Map)
+local TabMain = Window:CreateTab("Main (Núp Map)")
+
+TabMain:CreateButton({
+    Name = "Bật Chế Độ Cánh Bay / Núp Map",
+    Callback = function()
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            BaseY = hrp.Position.Y - 3.5
+            Enabled = true
+            LastHeight = Height
+            if Height >= 0 then Platform.CanCollide = true end
+            Rayfield:Notify({Title = "Thông báo", Content = "Đã Bật Chế Độ Bay/Núp Map!", Duration = 2})
+        end
+    end
+})
+
+TabMain:CreateButton({
+    Name = "Tắt Chế Độ Cánh Bay",
+    Callback = function()
+        Enabled = false
+        Platform.CanCollide = false
+        Platform.Position = Vector3.new(0, -1000, 0)
+        UnderVelocity.MaxForce = 0
+        UnderVelocity.Parent = nil
+        Attachment.Parent = nil
+        Rayfield:Notify({Title = "Thông báo", Content = "Đã Tắt Chế Độ!", Duration = 2})
+    end
+})
+
+TabMain:CreateSlider({
+    Name = "Độ Cao Lơ Lửng / Núp (-50 đến 50)",
+    Range = {-50, 50},
+    Increment = 1,
+    CurrentValue = 0,
+    Callback = function(Value)
+        Height = Value
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        
+        if hrp and Enabled then
+            if LastHeight >= 0 and Value < 0 then
+                Platform.CanCollide = false
+                Attachment.Parent = hrp
+                UnderVelocity.Parent = hrp
+                hrp.CFrame = CFrame.new(hrp.Position.X, BaseY + Value + 3.5, hrp.Position.Z)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, -500, 0)
+                task.wait(0.03)
+                UnderVelocity.MaxForce = 999999
+            elseif LastHeight < 0 and Value >= 0 then
+                UnderVelocity.MaxForce = 0
+                UnderVelocity.Parent = nil
+                Attachment.Parent = nil
+                hrp.CFrame = CFrame.new(hrp.Position.X, BaseY + Value + 3.5, hrp.Position.Z)
+                hrp.AssemblyLinearVelocity = Vector3.new(0, 500, 0)
+                task.wait(0.03)
+                Platform.CanCollide = true
+            end
+        end
+        LastHeight = Value
+    end
+})
+
+-- TAB 2: ADVANCED FLY MENU
+local TabFly = Window:CreateTab("Fly Menu")
+
+TabFly:CreateToggle({
+    Name = "Bật/Tắt Fly",
+    CurrentValue = false,
+    Callback = function(Value)
+        if Value ~= Flying then
+            if Value then StartFlying() else StopFlying() end
+        end
+    end
+})
+
+TabFly:CreateToggle({
+    Name = "Bật/Tắt Giao Diện 3 Nút Bay (HUD Screen)",
+    CurrentValue = false,
+    Callback = function(Value)
+        if Value then CreateFlyHUD() else RemoveFlyHUD() end
+    end
+})
+
+TabFly:CreateSlider({
+    Name = "Tốc Độ Bay (Fly Speed)",
+    Range = {10, 300},
+    Increment = 1,
+    CurrentValue = 100,
+    Callback = function(Value) FlySpeed = Value end
+})
+
+TabFly:CreateDropdown({
+    Name = "Chọn Chế Độ Fly",
+    Options = {"Superman", "Stand"},
+    CurrentOption = {"Superman"},
+    Callback = function(Option)
+        FlyMode = type(Option) == "table" and Option[1] or Option
+        if BtnModeToggle then
+            BtnModeToggle.Text = (FlyMode == "Superman") and "MODE\nSuper" or "MODE\nStand"
+            BtnModeToggle.BackgroundColor3 = (FlyMode == "Superman") and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(150, 50, 200)
+        end
+    end
+})
+
+TabFly:CreateDropdown({
+    Name = "Chọn Tư Thế Bay (Pose)",
+    Options = {"Úp Bụng", "Lật Ngửa", "Xoay Ngang", "Ngửa Bụng"},
+    CurrentOption = {"Úp Bụng"},
+    Cal
