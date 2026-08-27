@@ -1,0 +1,564 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+   Name = "Rayfield Hub | Fly, Character & Anti-Lag Pro",
+   LoadingTitle = "Đang khởi tạo hệ thống...",
+   LoadingSubtitle = "by Custom Script Fixed",
+   ConfigurationSaving = { Enabled = false },
+   KeySystem = false, 
+})
+
+--------------------------------------------------------------------------------
+-- SERVICES & VARIABLES
+--------------------------------------------------------------------------------
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+local Camera = workspace.CurrentCamera
+
+-- Character Mod Variables
+local WalkSpeedEnabled = false
+local CustomWalkSpeed = 16
+local JumpPowerEnabled = false
+local CustomJumpPower = 50
+local InfiniteJumpEnabled = false
+
+-- Fly Variables
+local Flying = false
+local FlyMode = "Superman"
+local PoseState = 1
+local FlySpeed = 100
+
+local Connection = nil
+local BodyVelocity, BodyGyro
+local AnimTrackSuperman, AnimTrackStand
+local AnimID_Superman = "rbxassetid://507765644"
+local AnimID_Stand    = "rbxassetid://507777826"
+
+-- Anti-Lag / Texture Variables
+local AntiLagEnabled = false
+local KeepPlayerSkins = true
+local OriginalMaterials = {}
+local OriginalLightingProps = {}
+local TextureMapConnection = nil
+
+-- HUD Fly Variables
+local FlyHUD = nil
+local BtnFlyToggle, BtnModeToggle, BtnPoseToggle
+
+-- UI References
+local Toggle_Fly_Body, Toggle_Fly_Menu, Toggle_HUD_Menu
+local StartFlying, StopFlying, CreateFlyHUD, RemoveFlyHUD
+
+--------------------------------------------------------------------------------
+-- ANTI-LAG / OPTIMIZE TEXTURE LOGIC
+--------------------------------------------------------------------------------
+local function IsPlayerCharacter(object)
+   for _, player in ipairs(Players:GetPlayers()) do
+      if player.Character and object:IsDescendantOf(player.Character) then
+         return true
+      end
+   end
+   return false
+end
+
+local function OptimizeObject(v)
+   if not AntiLagEnabled then return end
+   
+   if KeepPlayerSkins and IsPlayerCharacter(v) then
+      return
+   end
+
+   if v:IsA("BasePart") and not v:IsA("MeshPart") then
+      if not OriginalMaterials[v] then
+         OriginalMaterials[v] = { Material = v.Material, MaterialVariant = v.MaterialVariant }
+      end
+      v.Material = Enum.Material.SmoothPlastic
+   elseif v:IsA("MeshPart") then
+      if not OriginalMaterials[v] then
+         OriginalMaterials[v] = { Material = v.Material, TextureID = v.TextureID }
+      end
+      v.Material = Enum.Material.SmoothPlastic
+      v.TextureID = ""
+   elseif v:IsA("Decal") or v:IsA("Texture") then
+      if not OriginalMaterials[v] then
+         OriginalMaterials[v] = { Transparency = v.Transparency }
+      end
+      v.Transparency = 1
+   end
+end
+
+local function EnableAntiLag()
+   AntiLagEnabled = true
+   OriginalLightingProps.GlobalShadows = Lighting.GlobalShadows
+   Lighting.GlobalShadows = false
+
+   for _, v in ipairs(workspace:GetDescendants()) do
+      OptimizeObject(v)
+   end
+
+   if not TextureMapConnection then
+      TextureMapConnection = workspace.DescendantAdded:Connect(function(v)
+         if AntiLagEnabled then
+            task.wait()
+            OptimizeObject(v)
+         end
+      end)
+   end
+end
+
+local function DisableAntiLag()
+   AntiLagEnabled = false
+   
+   if TextureMapConnection then
+      TextureMapConnection:Disconnect()
+      TextureMapConnection = nil
+   end
+
+   if OriginalLightingProps.GlobalShadows ~= nil then
+      Lighting.GlobalShadows = OriginalLightingProps.GlobalShadows
+   end
+
+   for part, data in pairs(OriginalMaterials) do
+      if part and part.Parent then
+         if part:IsA("BasePart") and not part:IsA("MeshPart") then
+            part.Material = data.Material
+            if data.MaterialVariant then part.MaterialVariant = data.MaterialVariant end
+         elseif part:IsA("MeshPart") then
+            part.Material = data.Material
+            part.TextureID = data.TextureID
+         elseif part:IsA("Decal") or part:IsA("Texture") then
+            part.Transparency = data.Transparency
+         end
+      end
+   end
+   table.clear(OriginalMaterials)
+end
+
+--------------------------------------------------------------------------------
+-- CHARACTER CONNECTIONS & PROPERTY LOGIC
+--------------------------------------------------------------------------------
+local function UpdateCharacterStats()
+   if not Humanoid or not Humanoid.Parent then return end
+   if WalkSpeedEnabled then
+      Humanoid.WalkSpeed = CustomWalkSpeed
+   else
+      Humanoid.WalkSpeed = 16
+   end
+
+   if JumpPowerEnabled then
+      Humanoid.UseJumpPower = false
+      Humanoid.JumpHeight = CustomJumpPower
+   else
+      Humanoid.UseJumpPower = false
+      Humanoid.JumpHeight = 7.2
+   end
+end
+
+local propertyConn
+local function SetupHumanoidListeners()
+   if propertyConn then propertyConn:Disconnect() end
+   propertyConn = Humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+      if WalkSpeedEnabled and Humanoid.WalkSpeed ~= CustomWalkSpeed then
+         Humanoid.WalkSpeed = CustomWalkSpeed
+      end
+   end)
+end
+
+--------------------------------------------------------------------------------
+-- GIAO DIỆN HUD BAY
+--------------------------------------------------------------------------------
+function CreateFlyHUD()
+   if FlyHUD then return end
+   
+   FlyHUD = Instance.new("ScreenGui")
+   FlyHUD.Name = "FlyHUD"
+   FlyHUD.ResetOnSpawn = false
+   FlyHUD.Parent = CoreGui
+
+   local Container = Instance.new("Frame")
+   Container.Size = UDim2.new(0, 50, 0, 160)
+   Container.Position = UDim2.new(0, 15, 0.4, -80)
+   Container.BackgroundTransparency = 1
+   Container.Parent = FlyHUD
+
+   local UIList = Instance.new("UIListLayout")
+   UIList.SortOrder = Enum.SortOrder.LayoutOrder
+   UIList.Padding = UDim.new(0, 8)
+   UIList.Parent = Container
+
+   local function CreateHUDButton(name, text, defaultColor)
+      local btn = Instance.new("TextButton")
+      btn.Name = name
+      btn.Size = UDim2.new(0, 50, 0, 44)
+      btn.BackgroundColor3 = defaultColor
+      btn.Text = text
+      btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+      btn.TextSize = 11
+      btn.Font = Enum.Font.GothamBold
+      btn.Parent = Container
+
+      local corner = Instance.new("UICorner")
+      corner.CornerRadius = UDim.new(0, 10)
+      corner.Parent = btn
+      return btn
+   end
+
+   BtnFlyToggle  = CreateHUDButton("BtnFlyToggle", Flying and "FLY\nBẬT" or "FLY\nTẮT", Flying and Color3.fromRGB(0, 200, 100) or Color3.fromRGB(200, 50, 50))
+   BtnModeToggle = CreateHUDButton("BtnModeToggle", (FlyMode == "Superman") and "MODE\nSuper" or "MODE\nStand", (FlyMode == "Superman") and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(150, 50, 200))
+   BtnPoseToggle = CreateHUDButton("BtnPoseToggle", "POSE\n" .. PoseState, Color3.fromRGB(255, 140, 0))
+
+   BtnFlyToggle.MouseButton1Click:Connect(function()
+      if Flying then StopFlying() else StartFlying() end
+   end)
+
+   BtnModeToggle.MouseButton1Click:Connect(function()
+      FlyMode = (FlyMode == "Superman") and "Stand" or "Superman"
+      BtnModeToggle.Text = (FlyMode == "Superman") and "MODE\nSuper" or "MODE\nStand"
+      BtnModeToggle.BackgroundColor3 = (FlyMode == "Superman") and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(150, 50, 200)
+      if Flying then
+         StopFlying()
+         StartFlying()
+      end
+   end)
+
+   BtnPoseToggle.MouseButton1Click:Connect(function()
+      PoseState = (PoseState % 4) + 1
+      local poseNames = {"Úp Bụng", "Lật Ngửa", "Xoay Ngang", "Ngửa Bụng"}
+      BtnPoseToggle.Text = "POSE\n" .. PoseState
+      Rayfield:Notify({Title = "Đổi Tư Thế Bay", Content = "Tư thế: " .. poseNames[PoseState], Duration = 1.2})
+   end)
+end
+
+function RemoveFlyHUD()
+   if FlyHUD then
+      FlyHUD:Destroy()
+      FlyHUD = nil
+   end
+end
+
+--------------------------------------------------------------------------------
+-- TAB 1: TÙY CHỈNH CƠ THỂ
+--------------------------------------------------------------------------------
+local BodyTab = Window:CreateTab("Tùy Chỉnh Cơ Thể", 4483362458)
+
+BodyTab:CreateToggle({
+   Name = "Bật Chạy Nhanh",
+   CurrentValue = false,
+   Flag = "WalkSpeedToggleFlag",
+   Callback = function(Value)
+      WalkSpeedEnabled = Value
+      UpdateCharacterStats()
+   end,
+})
+
+BodyTab:CreateSlider({
+   Name = "Tốc Độ Chạy (Giới hạn 300)",
+   Range = {16, 300},
+   Increment = 1,
+   Suffix = "Speed",
+   CurrentValue = 100,
+   Flag = "WalkSpeedSliderFlag",
+   Callback = function(Value)
+      CustomWalkSpeed = Value
+      if WalkSpeedEnabled then UpdateCharacterStats() end
+   end,
+})
+
+BodyTab:CreateToggle({
+   Name = "Bật Nhảy Cao",
+   CurrentValue = false,
+   Flag = "JumpPowerToggleFlag",
+   Callback = function(Value)
+      JumpPowerEnabled = Value
+      UpdateCharacterStats()
+   end,
+})
+
+BodyTab:CreateSlider({
+   Name = "Độ Cao Nhảy (Giới hạn 300)",
+   Range = {7, 300},
+   Increment = 1,
+   Suffix = "Height",
+   CurrentValue = 50,
+   Flag = "JumpPowerSliderFlag",
+   Callback = function(Value)
+      CustomJumpPower = Value
+      if JumpPowerEnabled then UpdateCharacterStats() end
+   end,
+})
+
+BodyTab:CreateToggle({
+   Name = "Bật Nhảy Liên Tục Không Rơi (Air Jump)",
+   CurrentValue = false,
+   Flag = "InfiniteJumpFlag",
+   Callback = function(Value)
+      InfiniteJumpEnabled = Value
+   end,
+})
+
+UserInputService.JumpRequest:Connect(function()
+   if InfiniteJumpEnabled and Humanoid and Humanoid.Parent then
+      Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+   end
+end)
+
+Toggle_Fly_Body = BodyTab:CreateToggle({
+   Name = "Bật Chức Năng Fly",
+   CurrentValue = false,
+   Flag = "FlyToggleBodyFlag",
+   Callback = function(Value)
+      if Value ~= Flying then
+         if Value then StartFlying() else StopFlying() end
+      end
+   end,
+})
+
+BodyTab:CreateSlider({
+   Name = "Tốc Độ Bay (Fly Speed)",
+   Range = {10, 300},
+   Increment = 1,
+   Suffix = "Speed",
+   CurrentValue = 100,
+   Flag = "FlySpeedBodySliderFlag",
+   Callback = function(Value)
+      FlySpeed = Value
+   end,
+})
+
+--------------------------------------------------------------------------------
+-- TAB 2: FLY MENU TRONG RAYFIELD
+--------------------------------------------------------------------------------
+local FlyTab = Window:CreateTab("Fly Menu", 4483362458)
+
+Toggle_HUD_Menu = FlyTab:CreateToggle({
+   Name = "Bật/Tắt Giao Diện 3 Nút Bay Ngoài Màn Hình",
+   CurrentValue = false,
+   Flag = "FlyHUDToggleFlag",
+   Callback = function(Value)
+      if Value then CreateFlyHUD() else RemoveFlyHUD() end
+   end,
+})
+
+Toggle_Fly_Menu = FlyTab:CreateToggle({
+   Name = "Bật/Tắt Fly (Menu Chính)",
+   CurrentValue = false,
+   Flag = "FlyToggleFlag",
+   Callback = function(Value)
+      if Value ~= Flying then
+         if Value then StartFlying() else StopFlying() end
+      end
+   end,
+})
+
+FlyTab:CreateDropdown({
+   Name = "Chọn Chế Độ Fly",
+   Options = {"Superman", "Stand"},
+   CurrentOption = {"Superman"},
+   Flag = "FlyModeFlag",
+   Callback = function(Option)
+      FlyMode = type(Option) == "table" and Option[1] or Option
+      if BtnModeToggle then
+         BtnModeToggle.Text = (FlyMode == "Superman") and "MODE\nSuper" or "MODE\nStand"
+         BtnModeToggle.BackgroundColor3 = (FlyMode == "Superman") and Color3.fromRGB(0, 150, 255) or Color3.fromRGB(150, 50, 200)
+      end
+   end,
+})
+
+FlyTab:CreateDropdown({
+   Name = "Chọn Tư Thế (Pose)",
+   Options = {"Úp Bụng", "Lật Ngửa", "Xoay Ngang", "Ngửa Bụng"},
+   CurrentOption = {"Úp Bụng"},
+   Flag = "PoseFlag",
+   Callback = function(Option)
+      local choice = type(Option) == "table" and Option[1] or Option
+      if choice == "Úp Bụng" then PoseState = 1
+      elseif choice == "Lật Ngửa" then PoseState = 2
+      elseif choice == "Xoay Ngang" then PoseState = 3
+      elseif choice == "Ngửa Bụng" then PoseState = 4 end
+      
+      if BtnPoseToggle then
+         BtnPoseToggle.Text = "POSE\n" .. PoseState
+      end
+   end,
+})
+
+--------------------------------------------------------------------------------
+-- TAB 3: TỐI ƯU HÓA MAP & GIẢM LAG
+--------------------------------------------------------------------------------
+local OptimizeTab = Window:CreateTab("Tối Ưu / Giảm Lag", 4483362458)
+
+OptimizeTab:CreateToggle({
+   Name = "Bật Tối Ưu Texture (1 Pixel Map / Max FPS)",
+   CurrentValue = false,
+   Flag = "AntiLagToggleFlag",
+   Callback = function(Value)
+      if Value then
+         EnableAntiLag()
+         Rayfield:Notify({Title = "Tối Ưu Hóa Map", Content = "Đã tối ưu hóa Texture Map thành công!", Duration = 2})
+      else
+         DisableAntiLag()
+         Rayfield:Notify({Title = "Tối Ưu Hóa Map", Content = "Đã khôi phục Texture Map ban đầu.", Duration = 2})
+      end
+   end,
+})
+
+OptimizeTab:CreateToggle({
+   Name = "Giữ Nguyên Skin Người Chơi (Bỏ qua Player)",
+   CurrentValue = true,
+   Flag = "KeepPlayerSkinsFlag",
+   Callback = function(Value)
+      KeepPlayerSkins = Value
+      if AntiLagEnabled then
+         EnableAntiLag()
+      end
+   end,
+})
+
+--------------------------------------------------------------------------------
+-- LOGIC ANIMATIONS & FLY ENGINE (ĐÃ FIX KHÔNG LỖI)
+--------------------------------------------------------------------------------
+local function LoadAnimations()
+    local Animator = Humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", Humanoid)
+    
+    local anim1 = Instance.new("Animation")
+    anim1.AnimationId = AnimID_Superman
+    pcall(function()
+        AnimTrackSuperman = Animator:LoadAnimation(anim1)
+        AnimTrackSuperman.Priority = Enum.AnimationPriority.Action4
+        AnimTrackSuperman.Looped = true
+    end)
+
+    local anim2 = Instance.new("Animation")
+    anim2.AnimationId = AnimID_Stand
+    pcall(function()
+        AnimTrackStand = Animator:LoadAnimation(anim2)
+        AnimTrackStand.Priority = Enum.AnimationPriority.Action4
+        AnimTrackStand.Looped = true
+    end)
+end
+
+function StartFlying()
+    if Flying or not RootPart or not Humanoid then return end
+    Flying = true
+    
+    CreateFlyHUD()
+    if Toggle_HUD_Menu then Toggle_HUD_Menu:Set(true) end
+    if Toggle_Fly_Body and not Toggle_Fly_Body.CurrentValue then Toggle_Fly_Body:Set(true) end
+    if Toggle_Fly_Menu and not Toggle_Fly_Menu.CurrentValue then Toggle_Fly_Menu:Set(true) end
+
+    if BtnFlyToggle then
+       BtnFlyToggle.Text = "FLY\nBẬT"
+       BtnFlyToggle.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+    end
+
+    Humanoid.PlatformStand = true
+
+    -- Tạo BodyVelocity & BodyGyro chuẩn để hoạt động mượt không bị tụt khỏi Map
+    BodyVelocity = Instance.new("BodyVelocity")
+    BodyVelocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    BodyVelocity.Velocity = Vector3.zero
+    BodyVelocity.Parent = RootPart
+
+    BodyGyro = Instance.new("BodyGyro")
+    BodyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    BodyGyro.P = 10000
+    BodyGyro.D = 500
+    BodyGyro.Parent = RootPart
+
+    if FlyMode == "Superman" and AnimTrackSuperman then
+        AnimTrackSuperman:Play(0.2)
+    elseif FlyMode == "Stand" and AnimTrackStand then
+        AnimTrackStand:Play(0.2)
+    end
+
+    Connection = RunService.RenderStepped:Connect(function()
+        if not Flying or not Character or not RootPart or not Humanoid then return end
+        
+        local camCF = Camera.CFrame
+        local moveDir = Humanoid.MoveDirection
+
+        -- Tính toán xoay tư thế
+        local baseCF = CFrame.lookAt(RootPart.Position, RootPart.Position + camCF.LookVector)
+        if FlyMode == "Superman" then
+            if PoseState == 1 then
+                BodyGyro.CFrame = baseCF * CFrame.Angles(math.rad(-90), 0, 0)
+            elseif PoseState == 2 then
+                BodyGyro.CFrame = baseCF * CFrame.Angles(math.rad(-90), math.rad(180), 0)
+            elseif PoseState == 3 then
+                BodyGyro.CFrame = baseCF * CFrame.Angles(0, math.rad(90), math.rad(-90))
+            elseif PoseState == 4 then
+                BodyGyro.CFrame = baseCF * CFrame.Angles(math.rad(90), 0, 0)
+            end
+        else
+            BodyGyro.CFrame = CFrame.new(RootPart.Position, RootPart.Position + camCF.LookVector)
+        end
+
+        -- Tính toán tốc độ bay
+        if moveDir.Magnitude > 0 then
+            local moveVector = (camCF.RightVector * moveDir.X) + (camCF.LookVector * -moveDir.Z)
+            BodyVelocity.Velocity = moveVector * FlySpeed
+        else
+            BodyVelocity.Velocity = Vector3.zero
+        end
+    end)
+end
+
+function StopFlying()
+    if not Flying then return end
+    Flying = false
+    
+    if Toggle_Fly_Body and Toggle_Fly_Body.CurrentValue then Toggle_Fly_Body:Set(false) end
+    if Toggle_Fly_Menu and Toggle_Fly_Menu.CurrentValue then Toggle_Fly_Menu:Set(false) end
+
+    if BtnFlyToggle then
+       BtnFlyToggle.Text = "FLY\nTẮT"
+       BtnFlyToggle.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    end
+
+    if AnimTrackSuperman then AnimTrackSuperman:Stop(0.2) end
+    if AnimTrackStand then AnimTrackStand:Stop(0.2) end
+    
+    if Connection then 
+        Connection:Disconnect() 
+        Connection = nil 
+    end
+
+    if BodyVelocity then BodyVelocity:Destroy() end
+    if BodyGyro then BodyGyro:Destroy() end
+
+    if Humanoid then
+        Humanoid.PlatformStand = false
+        Humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- EVENT KHỞI TẠO & RESPAWN
+--------------------------------------------------------------------------------
+local function OnCharacterAdded(newChar)
+    Character = newChar
+    Humanoid = newChar:WaitForChild("Humanoid")
+    RootPart = newChar:WaitForChild("HumanoidRootPart")
+    
+    StopFlying()
+    RemoveFlyHUD()
+    LoadAnimations()
+    SetupHumanoidListeners()
+    UpdateCharacterStats()
+end
+
+LoadAnimations()
+SetupHumanoidListeners()
+UpdateCharacterStats()
+
+LocalPlayer.CharacterAdded:Connect(OnCharacterAdded)
+
+Rayfield:LoadConfiguration()
